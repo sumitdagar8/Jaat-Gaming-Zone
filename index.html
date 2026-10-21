@@ -220,10 +220,24 @@ function resetGame() {
     score('Score: 0');
   }
 
-  if(game==='runner') {
-    state={lane:1,obstacles:[],points:0,tick:0,over:false,jump:0};
-    score('Score: 0');
-  }
+  
+if(game==='runner') {
+  state={
+    lane:1,
+    obstacles:[],
+    coins:[],
+    points:0,
+    distance:0,
+    spawnTimer:0,
+    speed:0.00023,
+    over:false,
+    jump:0,
+    slide:0,
+    runTime:0
+  };
+  score('Score: 0');
+  message('Swipe ← → to move · ↑ to jump · ↓ to slide');
+}
 
   if(game==='space') {
     state={x:W/2,shots:[],rocks:[],points:0,tick:0,over:false,firing:false};
@@ -344,14 +358,270 @@ function drawSnake() {
   if(state.over)overlayResult();
 }
 
+
 function updateRunner(dt) {
-  if(state.over)return;
-  state.tick+=dt;
-  if(state.jump>0)state.jump=Math.max(0,state.jump-dt);
-  if(state.tick>650) {
-    state.tick=0;
-    state.obstacles.push({lane:Math.floor(Math.random()*3),y:-40});
+  if(state.over) return;
+
+  state.distance += dt * state.speed;
+  state.points = Math.floor(state.distance);
+  state.runTime += dt;
+  state.jump = Math.max(0, state.jump - dt);
+  state.slide = Math.max(0, state.slide - dt);
+  state.spawnTimer += dt;
+
+  // Speed gradually increases
+  state.speed = Math.min(0.00042, 0.00023 + state.distance * 0.0000008);
+
+  // Spawn obstacles and coins ahead on the track
+  if(state.spawnTimer > 850) {
+    state.spawnTimer = 0;
+
+    const lane = Math.floor(Math.random() * 3);
+    const roll = Math.random();
+
+    if(roll < 0.24) {
+      state.coins.push({lane, z:0});
+    } else {
+      const type = roll < 0.55 ? 'barrier'
+                 : roll < 0.78 ? 'slide'
+                 : 'train';
+      state.obstacles.push({lane, z:0, type, hit:false});
+    }
+
+    if(Math.random() < 0.6) {
+      const coinLane = Math.floor(Math.random() * 3);
+      state.coins.push({lane:coinLane, z:0});
+    }
   }
+
+  // Move objects toward the player
+  for(const o of state.obstacles) o.z += dt * state.speed;
+  for(const c of state.coins) c.z += dt * state.speed;
+
+  // Collect coins
+  for(const c of state.coins) {
+    if(!c.got && c.z > 0.88 && c.z < 1.02 && c.lane === state.lane) {
+      c.got = true;
+      state.points += 10;
+    }
+  }
+
+  // Obstacle collision
+  for(const o of state.obstacles) {
+    if(o.hit || o.z < 0.89 || o.z > 1.02) continue;
+    if(o.lane !== state.lane) continue;
+
+    const jumping = state.jump > 0;
+    const sliding = state.slide > 0;
+
+    if(o.type === 'barrier' && jumping) {
+      o.hit = true;
+    } else if(o.type === 'slide' && sliding) {
+      o.hit = true;
+    } else {
+      gameOver('CRASH!');
+      message('Score: ' + state.points + ' · Tap Restart to run again');
+      break;
+    }
+  }
+
+  state.obstacles = state.obstacles.filter(o => o.z < 1.1);
+  state.coins = state.coins.filter(c => c.z < 1.1 && !c.got);
+
+  score('Score: ' + state.points);
+}
+
+function drawRunner() {
+  background();
+
+  const horizon = H * 0.20;
+  const ground = H * 0.94;
+  const roadTop = W * 0.13;
+  const roadBottom = W * 0.49;
+
+  // Sky
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#101a42');
+  sky.addColorStop(1,'#283c69');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0,0,W,H);
+
+  // Distant skyline
+  for(let i=0;i<13;i++) {
+    const bw=W*0.055;
+    const bh=H*(0.06+(i%4)*0.025);
+    const x=i*W/12-bw/2;
+    ctx.fillStyle=i%2?'#1b2850':'#202d58';
+    ctx.fillRect(x,horizon-bh,bw,bh);
+  }
+
+  // Perspective road
+  ctx.fillStyle='#30384f';
+  ctx.beginPath();
+  ctx.moveTo(W/2-roadTop,horizon);
+  ctx.lineTo(W/2+roadTop,horizon);
+  ctx.lineTo(W/2+roadBottom,ground);
+  ctx.lineTo(W/2-roadBottom,ground);
+  ctx.closePath();
+  ctx.fill();
+
+  // Road edges
+  ctx.strokeStyle='#67e8f9';
+  ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.moveTo(W/2-roadTop,horizon);
+  ctx.lineTo(W/2-roadBottom,ground);
+  ctx.moveTo(W/2+roadTop,horizon);
+  ctx.lineTo(W/2+roadBottom,ground);
+  ctx.stroke();
+
+  // Perspective lane markings
+  for(let lane=1;lane<=2;lane++) {
+    const topX=W/2-roadTop+(roadTop*2)*lane/3;
+    const bottomX=W/2-roadBottom+(roadBottom*2)*lane/3;
+
+    ctx.strokeStyle='#a7b5d8';
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(topX,horizon);
+    ctx.lineTo(bottomX,ground);
+    ctx.stroke();
+  }
+
+  // Moving road stripes
+  for(let i=0;i<10;i++) {
+    const z=((i/10)+(state.distance*0.025)%1)%1;
+    const p=z*z;
+    const y=horizon+(ground-horizon)*p;
+    const half=roadTop+(roadBottom-roadTop)*p;
+    ctx.fillStyle='#56617b';
+    ctx.fillRect(W/2-half,y,half*2,2+p*3);
+  }
+
+  function project(lane,z) {
+    const p=Math.max(0,Math.min(1,z));
+    const curve=p*p;
+    const roadHalf=roadTop+(roadBottom-roadTop)*curve;
+    return {
+      x:W/2-roadHalf+(roadHalf*2)*(lane+0.5)/3,
+      y:horizon+(ground-horizon)*curve,
+      scale:0.12+curve*0.95
+    };
+  }
+
+  // Coins
+  for(const c of state.coins) {
+    const p=project(c.lane,c.z);
+    const r=8*p.scale+2;
+    ctx.fillStyle='#fbbf24';
+    ctx.beginPath();
+    ctx.arc(p.x,p.y-r*2,r,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle='#fff1a8';
+    ctx.lineWidth=2;
+    ctx.stroke();
+  }
+
+  // Obstacles
+  for(const o of state.obstacles) {
+    const p=project(o.lane,o.z);
+    const w=38*p.scale+5;
+    const h=(o.type==='train'?70: o.type==='slide'?24:35)*p.scale+4;
+    const y=p.y-h;
+
+    if(o.type==='train') {
+      roundRect(p.x-w/2,y,w,h,5,'#e04f6b');
+      roundRect(p.x-w*.32,y+8*p.scale,w*.64,16*p.scale,3,'#67e8f9');
+      ctx.fillStyle='#202942';
+      ctx.fillRect(p.x-w*.28,y+h*.65,w*.56,Math.max(3,h*.08));
+    } else if(o.type==='slide') {
+      roundRect(p.x-w/2,y,w,h,5,'#fbbf24');
+      ctx.fillStyle='#473313';
+      ctx.fillRect(p.x-w*.3,y+h*.3,w*.6,Math.max(2,h*.16));
+    } else {
+      roundRect(p.x-w/2,y,w,h,5,'#fb7185');
+      ctx.fillStyle='#fff';
+      ctx.fillRect(p.x-w*.35,y+h*.35,w*.7,Math.max(2,h*.12));
+    }
+  }
+
+  // Running character
+  const px=W/2-roadBottom+(roadBottom*2)*(state.lane+0.5)/3;
+  const jumping=state.jump>0;
+  const sliding=state.slide>0;
+  const run=Math.sin(state.runTime*0.018);
+  const baseY=H*0.83-(jumping?Math.sin((1-state.jump/650)*Math.PI)*H*0.19:0);
+  const s=Math.min(W/300,1.35);
+
+  ctx.save();
+  ctx.translate(px,baseY);
+
+  // Shadow
+  ctx.fillStyle='rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(0,jumping?35*s:31*s,18*s,5*s,0,0,Math.PI*2);
+  ctx.fill();
+
+  if(sliding) {
+    // Sliding body
+    roundRect(-20*s,5*s,39*s,17*s,8*s,'#67e8f9');
+    ctx.fillStyle='#f2c6a0';
+    ctx.beginPath();
+    ctx.arc(19*s,4*s,9*s,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle='#111827';
+    ctx.lineWidth=5*s;
+    ctx.beginPath();
+    ctx.moveTo(-8*s,18*s);
+    ctx.lineTo(-25*s,24*s);
+    ctx.moveTo(8*s,18*s);
+    ctx.lineTo(25*s,24*s);
+    ctx.stroke();
+  } else {
+    // Legs running animation
+    ctx.strokeStyle='#263452';
+    ctx.lineWidth=8*s;
+    ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(-5*s,17*s);
+    ctx.lineTo((-9+run*9)*s,30*s);
+    ctx.lineTo((-15-run*8)*s,34*s);
+    ctx.moveTo(5*s,17*s);
+    ctx.lineTo((9-run*9)*s,30*s);
+    ctx.lineTo((15+run*8)*s,34*s);
+    ctx.stroke();
+
+    // Arms
+    ctx.strokeStyle='#f2c6a0';
+    ctx.lineWidth=6*s;
+    ctx.beginPath();
+    ctx.moveTo(-10*s,-3*s);
+    ctx.lineTo((-17-run*6)*s,8*s);
+    ctx.moveTo(10*s,-3*s);
+    ctx.lineTo((17+run*6)*s,5*s);
+    ctx.stroke();
+
+    // Shirt
+    roundRect(-12*s,-13*s,24*s,34*s,7*s,'#67e8f9');
+
+    // Head
+    ctx.fillStyle='#f2c6a0';
+    ctx.beginPath();
+    ctx.arc(0,-23*s,10*s,0,Math.PI*2);
+    ctx.fill();
+
+    // Hair
+    ctx.fillStyle='#20202a';
+    ctx.beginPath();
+    ctx.arc(0,-27*s,10*s,Math.PI,Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  if(state.over) overlayResult();
+}
+
   const speed=dt*.22;
   state.obstacles.forEach(o=>o.y+=speed);
   state.obstacles=state.obstacles.filter(o=>o.y<H+30);
@@ -553,9 +823,10 @@ canvas.addEventListener('pointerup',e=>{
     }
     if(game==='runner'&&!state.over&&Math.max(Math.abs(dx),Math.abs(dy))>25) {
       if(Math.abs(dx)>Math.abs(dy))state.lane=Math.max(0,Math.min(2,state.lane+(dx>0?1:-1)));
-      else if(dy<0)state.jump=450;
+      else if(dy<0)state.jump=650;
+else if(dy>0)state.slide=550;
     } else if(game==='runner'&&!state.over&&Math.abs(dx)<20&&Math.abs(dy)<20) {
-      state.jump=450;
+      state.jump=650;
     }
     if(game==='memory'&&!state.over)memoryTap(p.x,p.y);
     if(game==='ttt'&&!state.over)tttTap(p.x,p.y);
@@ -620,7 +891,8 @@ document.addEventListener('keydown',e=>{
     if(e.key==='ArrowRight'||e.key==='d')turnSnake(1,0);
   }
   if(game==='runner'&&!state.over) {
-    if(e.key==='ArrowLeft')state.lane=Math.max(0,state.lane-1);
+   if(e.key==='ArrowDown')state.slide=550; 
+   if(e.key==='ArrowLeft')state.lane=Math.max(0,state.lane-1);
     if(e.key==='ArrowRight')state.lane=Math.min(2,state.lane+1);
     if(e.key==='ArrowUp'||e.key===' ')state.jump=450;
   }
