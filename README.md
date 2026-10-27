@@ -1,2 +1,2 @@
 # Jaat-Gaming-Zone
-Dagar Gaming Zone by Sumit Dagar
+Jaat Gaming Zone by Sumit Dagar
